@@ -24,6 +24,18 @@ class Request:
         self.save_path = save_path
     
     def parse_uri(self, URI):
+        """Checks if URI is in correct format
+        Currently the only supported format is 'http://example.com'
+
+        Args:
+            URI (string): the URI
+
+        Raises:
+            Exception: Raise exception if URI not in correct format
+
+        Returns:
+            string, string: Returns the host address and the target path
+        """
         if URI[:7] != "http://":
             raise Exception("URI must be in the format 'http://example.com'!")
         URI = URI[7:]
@@ -45,7 +57,12 @@ class Request:
             logger.debug("Created socket")
             self.sock = s
 
-            s.connect((self.uri, self.port))
+            try:
+                s.connect((self.uri, self.port))
+            except:
+                logger.warning("Failed to connect to server")
+                return
+
             logger.debug(f"Connected to {self.uri} on port {self.port}!")
 
             request = f"{self.type} {self.target} HTTP/1.1\r\nHost: {self.uri}\r\n\r\n"
@@ -63,8 +80,6 @@ class Request:
     def receive(self):
         """Receive the response from the HTTP Request
         """
-        s = self.sock
-
         logger.debug("Receiving headers...")
         headers = self.receive_headers()
         logger.debug("Headers succesfully received!")
@@ -88,7 +103,7 @@ class Request:
                 except:
                     logger.info("No encoding found")
 
-                body = self.get_images(body, encoding=encoding)
+                body = self.get_images(body.decode(encoding))
                 with open("body.html", "wb") as file:
                     file.write(body.encode())
             else:
@@ -128,13 +143,14 @@ class Request:
         Returns:
             dict: parsed headers
         """
-        return dict([line.split(": ") for line in headers.splitlines()[1:-1]])
+        headers = headers.strip()
+        return dict([line.split(": ") for line in headers.splitlines()[1:]])
 
     def receive_body(self):
-        """Receives the response body
+        """Receives the response body content
 
         Returns:
-            bytes: raw body 
+            bytes: the encoded response body 
         """
         # Checking how the content will be sent
         if "Content-Length" in self.headers:
@@ -152,7 +168,6 @@ class Request:
                 hex_size = ""
                 while "\r\n" not in hex_size:
                     hex_size += self.sock.recv(1).decode()
-                    # print(f"Hexstring: {hex_size}")
 
                 # Converting the block size in hex to integer
                 block_size = int(hex_size, 16)
@@ -171,32 +186,55 @@ class Request:
                 self.sock.recv(2)
         return body
 
-    def get_images(self, html, encoding):
-        soup = BeautifulSoup(html.decode(encoding=encoding), features="lxml")
+    def get_images(self, html):
+        """Downloads images and changes html to use local paths
+
+        Args:
+            html (string): a string containing html
+
+        Returns:
+            string: the html with changed source paths of images
+        """
+        soup = BeautifulSoup(html, features="lxml")
 
         cwd = os.getcwd()
 
         for img in soup.find_all(["img", "IMG"]):
 
             img_path = img["src"]
-
-            if "://" not in img_path:
-                port = self.port
-                target = img_path if img_path[0] == "/" else "/" + img_path
-                URI = "http://" + self.uri + target
-            else:
-                URI = img_path
-                port = 80
-
-
             img_name = img_path[img_path.rfind("/") + 1 :]
             new_path = cwd + f"/images/{img_name}"
+             
 
-            # TODO: USE THE SAME CONNECTION FOR THIS!!!!!
-            Request("GET", URI, port, save_path=new_path).send()
+            # Reuse connection for internal images
+            if "://" not in img_path:
+                target = img_path if img_path[0] == "/" else "/" + img_path
+                self.request_internal_image(target, new_path)
+            # Create new connection for external images
+            else:
+                if "https://" in img_path:
+                    continue
+
+                URI = img_path
+                port = 80
+                Request("GET", URI, port, save_path=new_path).send()
+
             img["src"] = new_path
 
         return soup.prettify()
+
+    def request_internal_image(self, target, save_path):
+        """Downloads image stored on same host as current request
+
+        Args:
+            target (string): the path of the image on the server
+            save_path (string): path to store the image locally
+        """
+
+        request = f"GET {target} HTTP/1.1\r\nHost: {self.uri}\r\n\r\n"
+        self.save_path = save_path
+        self.sock.sendall(request.encode())
+        self.receive()
 
 
 def parse_arguments():
@@ -222,11 +260,7 @@ def parse_arguments():
 
     return parser.parse_args()
 
-def check_arguments(args):
-    uri = args.URI
-
 
 if __name__ == "__main__":
     args = parse_arguments()
-    check_arguments(args)
     Request(args.command, args.URI, args.port).send()

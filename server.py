@@ -20,7 +20,7 @@ class Server:
         self.socket = self.setup_socket()
 
     def setup_socket(self):
-        """Initializing socket"""
+        """Initialize socket"""
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((self.address, self.port))
@@ -41,6 +41,8 @@ class Server:
             thr.start()
 
     def stop(self):
+        """Stop server
+        """
         logger.info("Shutting down server...")
         self.socket.shutdown(socket.SHUT_RDWR)
         self.socket.close()
@@ -49,13 +51,11 @@ class Server:
         """Handles an incoming request
 
         Args:
-            conn (socket connection): The connection for the incoming request
+            conn (socket): The socket with the connection for the incoming request
         """
 
         try:
-            conn.settimeout(2)
             data = bytes()
-
             try:
                 while b"\r\n\r\n" not in data:
                     chunk = conn.recv(1024)
@@ -64,13 +64,16 @@ class Server:
                     data += chunk
             except TimeoutError:
                 return
-                logger.warn("Connection timed out!")
+                logger.debug("Connection timed out!")
+
+            if not data:
+                logger.debug("No data received")
+                return
 
             header_end = data.find(b"\r\n\r\n")
             headers = data[:header_end].decode()
             request_type, path, _ = headers.splitlines()[0].split()
             logger.debug(f"Incoming {request_type} request for {path}")
-            print(headers.splitlines()[0])
 
             if f"Host: {self.address}" not in headers.splitlines()[1]:
                 logger.warning("BAD REQUEST")
@@ -79,6 +82,7 @@ class Server:
 
             headers = dict([line.split(": ") for line in headers.splitlines()[2:]])
 
+            # Start data from end of header + 4 bytes to skip double carriage return
             data = data[header_end + 4 :]
             if "Content-Length" in headers.keys():
                 content_length = headers["Content-Length"]
@@ -98,12 +102,9 @@ class Server:
 
             self.send_file(conn, "www" + path, headers)
 
-            if "Connection" in headers.keys() and headers["Connection"] == "keep-alive":
-                self.handle_conn(conn)
+            self.handle_conn(conn)
         except Exception as e:
-            print(e)
-            traceback.print_exc()
-            print("Tis genaaid")
+            logger.error(traceback.format_exc())
             self.send_status_code(conn, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         conn.close()
@@ -114,9 +115,10 @@ class Server:
 
         Args:
                 path (string): Path to the file to send with the request
+                code (HTTPStatus): The HTTP Status to send in the response
 
         Returns:
-                string: string containing all headers
+                string: all headers correctly formatted
         """
         status_line = f"HTTP/1.1 {code.value} {code.phrase}\r\n"
         headers = dict()
@@ -124,6 +126,8 @@ class Server:
         if path is not None:
             headers["Content-Length"] = os.path.getsize(path)
             headers["Content-Type"] = mimetypes.guess_type(path)[0]
+        else:
+            headers["Content-Length"] = 0
 
         header_string = status_line
         for (key, value) in headers.items():
@@ -136,7 +140,7 @@ class Server:
         """Send file through open connection
 
         Args:
-                conn (socket.Connection): The connection you want to send the file through
+                conn (socket): The connection you want to send the file through
                 path (string): Path to the file to send
                 file_type (string): The file type
         """
@@ -179,8 +183,13 @@ class Server:
             file.write(data)
 
     def send_status_code(self, conn, status_code):
+        """Send status code through open connection
+
+        Args:
+            conn (socket): the socket to send the response to
+            status_code (HTTPStatus): The HTTP status to send
+        """
         headers = self.generate_headers(code=status_code)
-        print(headers)
         conn.sendall(headers.encode())
 
 
