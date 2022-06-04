@@ -73,7 +73,7 @@ class Request:
 
             logger.debug("Sending request...")
             s.sendall(request.encode())
-            logger.info("Request has been succesfully sent!")
+            logger.debug("Request has been succesfully sent!")
 
             self.receive()
 
@@ -101,7 +101,7 @@ class Request:
                 try:
                     encoding = self.headers["Content-Type"].split(";")[1].split("=")[-1]
                 except:
-                    logger.info("No encoding found")
+                    logger.debug("No encoding found")
 
                 body = self.get_images(body.decode(encoding))
                 with open("body.html", "wb") as file:
